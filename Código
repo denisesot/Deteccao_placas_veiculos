@@ -1,0 +1,135 @@
+import sqlite3
+import cv2
+import pytesseract
+import re
+from datetime import datetime
+import requests
+from matplotlib import pyplot as plt
+import time
+
+# Configuração do Tesseract OCR
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"  # Ajuste o caminho se necessário.
+
+
+# Função para validar o formato da placa brasileira
+def validar_placa(placa):
+    padrao_antigo = r"^[A-Z]{3}-\d{4}$"
+    padrao_novo = r"^[A-Z]{3}\d[A-Z]\d{2}$"
+    return re.match(padrao_antigo, placa) or re.match(padrao_novo, placa)
+
+# Função para salvar no banco de dados
+# def salvar_no_banco(placa, imagem):
+#     conn = sqlite3.connect(db_path)
+#     cursor = conn.cursor()
+#     data_registro = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+#     cursor.execute("""
+#         INSERT INTO carros (placa, modelo, imagem, data_registro)
+#         VALUES (?, ?, ?, ?)
+#     """, (placa, None, imagem, data_registro))
+#     conn.commit()
+#     conn.close()
+
+# Função para consultar a API e verificar se a placa está registrada
+def consultar_api(placa, api_url):
+    try:
+        response = requests.get(api_url)
+        if response.status_code == 200:
+            dados = response.json()
+            carros = dados.get("Carros", [])
+            for carro in carros:
+                if carro.get("placa") == placa:
+                    return True  # Placa encontrada
+            return False  # Placa não encontrada
+        else:
+            print(f"Erro na consulta à API: {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"Erro ao consultar API: {e}")
+        return False
+
+# Função principal para processar a imagem e reconhecer placas
+def processar_imagem(api_url, fps):
+    # Limite de FPS
+    frame_delay = 1 / fps
+
+    # Inicializar a câmera
+    camera = cv2.VideoCapture(0)
+    if not camera.isOpened():
+        print("Erro ao acessar a câmera.")
+        return
+
+    # Carregar classificador Haar Cascade para placas
+    cascade_url = 'https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_russian_plate_number.xml'
+    cascade_path = 'haarcascade_russian_plate.xml'
+    if not os.path.exists(cascade_path):
+        response = requests.get(cascade_url)
+        with open(cascade_path, 'wb') as f:
+            f.write(response.content)
+    
+    car_plate_cascade = cv2.CascadeClassifier(cascade_path)
+    if car_plate_cascade.empty():
+        print("Erro ao carregar o classificador Haar Cascade.")
+        return
+
+    while True:
+        # Captura o frame da câmera
+        start_time = time.time()
+        # Capturar frame da câmera
+        ret, frame = camera.read()
+        if not ret:
+            print("Erro ao capturar frame.")
+            break
+
+        # Converter para escala de cinza
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # Detectar placas
+        plates = car_plate_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5)
+        if len(plates) > 0:
+            for x, y, w, h in plates:
+                # Desenhar o retângulo ao redor da placa
+                frame_with_rect = frame.copy()
+                cv2.rectangle(frame_with_rect, (x, y), (x + w, y + h), (0, 255, 0), 3)
+
+                # Extrair a região da placa
+                placa_img = gray[y:y+h, x:x+w]
+
+                # Reconhecer texto usando OCR
+                placa_texto = pytesseract.image_to_string(placa_img, config='--psm 8')
+                placa_texto = re.sub(r'[^A-Z0-9]', '', placa_texto)  # Limpar caracteres inválidos
+
+                if validar_placa(placa_texto):
+                    print(f"Placa detectada: {placa_texto}")
+
+                    # Consultar API
+                    match_api = consultar_api(placa_texto, api_url)
+                    if match_api:
+                        print(f"Placa {placa_texto} confirmada pela API.")
+                    else:
+                        print(f"Placa {placa_texto} não encontrada na API.")
+                else:
+                    print(f"Texto inválido detectado: {placa_texto}")
+
+                # Mostrar imagem com a detecção
+                plt.imshow(cv2.cvtColor(frame_with_rect, cv2.COLOR_BGR2RGB))
+                plt.axis('off')
+                plt.show()
+
+        # Controle de FPS
+        elapsed_time = time.time() - start_time
+        if elapsed_time < frame_delay:
+            time.sleep(frame_delay - elapsed_time)
+
+        # Mostrar o frame ao vivo
+        cv2.imshow("Reconhecimento de Placas", frame)
+
+        # Saída ao pressionar 'q'
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    # Finalizar a captura
+    camera.release()
+    cv2.destroyAllWindows()
+
+# URL da API
+api_url = "http://ufscarona.j.p.carvalho.vms.ufsc.br:8081/api/carros"
