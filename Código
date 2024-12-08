@@ -133,3 +133,5 @@ def processar_imagem(api_url, fps):
 
 # URL da API
 api_url = "http://ufscarona.j.p.carvalho.vms.ufsc.br:8081/api/carros"
+
+processar_imagem(api_url,1)
